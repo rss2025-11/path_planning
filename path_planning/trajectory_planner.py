@@ -392,6 +392,7 @@ class PathPlan(Node):
                 )
                 < self.goal_threshold
             ):
+                self.get_logger().info(f"Path found after {iteration} iterations!")
                 # Reconstruct path
                 path = []
                 current = new_point
@@ -402,7 +403,7 @@ class PathPlan(Node):
 
                 # Post-process the path to make it smoother
                 smoothed_path = self.path_processor.smooth_path(path)
-
+                self.get_logger().info("Path reconstructed and smoothed.")
                 # Convert smoothed path to trajectory
                 self.trajectory.clear()
                 for point in smoothed_path:
@@ -411,7 +412,6 @@ class PathPlan(Node):
                 # Publish trajectory with correct orientations
                 self.traj_pub.publish(self.toPoseArray(smoothed_path))
                 self.trajectory.publish_viz()
-                self.get_logger().info(f"Path found after {iteration} iterations!")
                 return
 
         # If no path found after max iterations
