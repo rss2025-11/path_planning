@@ -14,7 +14,7 @@ from geometry_msgs.msg import (
     Pose,
 )
 from nav_msgs.msg import OccupancyGrid
-from .utils import LineTrajectory
+from .utils import LineTrajectory, MapProcessor, PathProcessor
 
 
 class PathPlan(Node):
@@ -70,9 +70,24 @@ class PathPlan(Node):
         self.current_pose = None
         self.goal_pose = None
 
+        # Create map processor with desired parameters
+        # Example: 10 pixel dilation radius, no erosion
+        self.map_processor = MapProcessor(dilation_radius=10, erosion_radius=0)
+
+        # Create path processor with collision checker
+        self.path_processor = PathProcessor(
+            collision_checker=self.is_collision_free,
+            max_smoothing_iterations=100,
+            max_attempts=10,
+        )
+
     def map_cb(self, msg):
         """Store the occupancy grid map"""
-        self.map = np.array(msg.data).reshape((msg.info.height, msg.info.width))
+        raw_map = np.array(msg.data).reshape((msg.info.height, msg.info.width))
+
+        # Process the map with morphological operations
+        self.map = self.map_processor.process_map(raw_map)
+
         self.map_resolution = msg.info.resolution
         self.map_origin = msg.info.origin
 
@@ -385,13 +400,16 @@ class PathPlan(Node):
                     current = tree[current]["parent"]
                 path.reverse()
 
-                # Convert path to trajectory
+                # Post-process the path to make it smoother
+                smoothed_path = self.path_processor.smooth_path(path)
+
+                # Convert smoothed path to trajectory
                 self.trajectory.clear()
-                for point in path:
+                for point in smoothed_path:
                     self.trajectory.addPoint((point[0], point[1]))
 
                 # Publish trajectory with correct orientations
-                self.traj_pub.publish(self.toPoseArray(path))
+                self.traj_pub.publish(self.toPoseArray(smoothed_path))
                 self.trajectory.publish_viz()
                 self.get_logger().info(f"Path found after {iteration} iterations!")
                 return
