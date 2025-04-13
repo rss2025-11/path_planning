@@ -23,7 +23,8 @@ class PurePursuit(Node):
             self.get_parameter("drive_topic").get_parameter_value().string_value
         )
 
-        self.lookahead = 1.0  # FILL IN #
+        self.lookahead_baseline = 1.0  # FILL IN #
+        self.lookahead = self.lookahead_baseline
         self.speed = 1.0  # FILL IN #
         self.wheelbase_length = 0.35  # FILL IN #
 
@@ -74,50 +75,66 @@ class PurePursuit(Node):
         # Find minimum distance and segment index
         min_index = np.argmin(dists)
         min_point = projections[min_index]
+        # min_dist = dists[min_index]
+        # self.lookahead = self.lookahead_baseline + min_dist*0.1
         return min_point, min_index
-
+    
     def find_lookahead_point(self, segment_index):
-        circle_radius = self.lookahead
+        circle_radius = self.lookahead_baseline
         circle_center = self.current_pos
-        segments_to_check = self.trajectory_array[segment_index:]
+        segments = self.trajectory_array[segment_index:]
+
+        if len(segments) < 2:
+            return None  # Not enough points to define a segment
+
+        starts = segments[:-1]  # (N, 2)
+        ends = segments[1:]     # (N, 2)
+        vectors = ends - starts  # (N, 2)
+
+        # Coefficients for quadratic intersection equation
+        a = np.sum(vectors * vectors, axis=1)  # (N,)
+        start_to_center = starts - circle_center  # (N, 2)
+        b = 2 * np.sum(vectors * start_to_center, axis=1)  # (N,)
+        c = np.sum(start_to_center * start_to_center, axis=1) - circle_radius ** 2  # (N,)
+
+        discriminant = b**2 - 4 * a * c  # (N,)
+        valid = discriminant >= 0
+
+        if not np.any(valid):
+            self.get_logger().info("No valid lookahead point found: no segment intersects.")
+            return None
+
+        # Only compute intersections for valid segments
+        a = a[valid]
+        b = b[valid]
+        c = c[valid]
+        vectors = vectors[valid]
+        starts = starts[valid]
+        segment_idxs = np.arange(segment_index, segment_index + len(valid))[valid]
+
+        sqrt_discriminant = np.sqrt(discriminant[valid])
+        t1 = (-b + sqrt_discriminant) / (2 * a)
+        t2 = (-b - sqrt_discriminant) / (2 * a)
+
+        # Combine both t1 and t2 into a single array for filtering
+        t_all = np.stack([t1, t2], axis=1)  # (N, 2)
+        t_mask = (t_all >= 0) & (t_all <= 1)  # Valid t values
 
         valid_points = []
-
-        for i in range(len(segments_to_check) - 1):
-            segment_start = segments_to_check[i]
-            segment_end = segments_to_check[i + 1]
-            segment_vector = segment_end - segment_start
-
-            a = np.dot(segment_vector, segment_vector)
-            b = 2 * np.dot(segment_vector, segment_start - circle_center)
-            c = (
-                np.dot(segment_start - circle_center, segment_start - circle_center)
-                - circle_radius**2
-            )
-
-            discriminant = b**2 - 4 * a * c
-
-            if discriminant < 0:
-                continue  # No intersection
-
-            sqrt_discriminant = np.sqrt(discriminant)
-            t1 = (-b + sqrt_discriminant) / (2 * a)
-            t2 = (-b - sqrt_discriminant) / (2 * a)
-
-            for t in [t1, t2]:
-                if 0 <= t <= 1:
-                    lookahead_point = segment_start + t * segment_vector
-                    valid_points.append((segment_index + i, lookahead_point))
+        for i in range(t_all.shape[0]):
+            for j in range(2):
+                if t_mask[i, j]:
+                    t = t_all[i, j]
+                    point = starts[i] + t * vectors[i]
+                    valid_points.append((segment_idxs[i], point))
 
         if valid_points:
-            # Pick the one from the furthest segment, or furthest along segment
             best_point = max(valid_points, key=lambda x: x[0])
             return best_point[1]
 
-        self.get_logger().info(
-            "No valid lookahead point found: circle does not intersect any segment."
-        )
+        self.get_logger().info("No valid lookahead point found: all intersections out of bounds.")
         return None
+
 
     def control(self, lookahead_point):
         drive_cmd = AckermannDriveStamped()
@@ -137,7 +154,7 @@ class PurePursuit(Node):
 
         angle_to_goal = np.arctan2(local_y, local_x)
         angle = np.arctan(
-            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
+            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead_baseline + 1e-6)
         )
 
         drive_cmd.drive.speed = self.speed
@@ -151,6 +168,7 @@ class PurePursuit(Node):
         drive_cmd.drive.steering_angle = 0.0
         self.drive_pub.publish(drive_cmd)
 
+    # If particle filter is not running, the robot will remain stationary
     def pose_callback(self, odometry_msg):
 
         # Access the orientation quaternion
@@ -173,9 +191,6 @@ class PurePursuit(Node):
                 lookahead_point = self.find_lookahead_point(segment_idx)
                 if lookahead_point is not None:
                     self.control(lookahead_point)
-        # self.get_logger().info(f'Receiving a pose from localization: {self.current_x, self.current_y, self.current_theta}')
-
-    # find the closest point from the robot to a trajectory segment (assuming piecewise linear segments)
 
     def trajectory_callback(self, msg):
         self.get_logger().info(f"Receiving new trajectory {len(msg.poses)} points")
