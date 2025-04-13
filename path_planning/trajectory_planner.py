@@ -38,7 +38,7 @@ class PathPlan(Node):
         self.map_set = False
 
         self.traversal_rate = 0.25
-        self.obstacle_threshold = self.obstacle_threshold
+        self.obstacle_threshold = 0.8
         self.car_buffer = 0.25
 
         self.map_sub = self.create_subscription(
