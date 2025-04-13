@@ -140,6 +140,27 @@ class PurePursuit(Node):
         self.get_logger().info("No valid lookahead point found: all intersections out of bounds.")
         return None
 
+    def inch_towards_start(self, min_point):
+        """
+        Move forward slowly until within range of a trajectory.
+        """
+        drive_cmd = AckermannDriveStamped()
+        drive_cmd.header.stamp = self.get_clock().now().to_msg()
+        dx = min_point[0] - self.current_x
+        dy = min_point[1] - self.current_y
+
+        # Rotate into robot frame
+        local_x = np.cos(-self.current_theta) * dx - np.sin(-self.current_theta) * dy
+        local_y = np.sin(-self.current_theta) * dx + np.cos(-self.current_theta) * dy
+
+        # Compute angle to target in robot frame
+        angle_to_goal = np.arctan2(local_y, local_x)
+
+        # Use pure pursuit logic
+        angle = np.arctan(2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6))
+        drive_cmd.drive.speed = 0.5
+        drive_cmd.drive.steering_angle = angle
+        self.drive_pub.publish(drive_cmd)
 
     def control(self, lookahead_point):
         drive_cmd = AckermannDriveStamped()
@@ -200,6 +221,8 @@ class PurePursuit(Node):
                 lookahead_point = self.find_lookahead_point(segment_idx)
                 if lookahead_point is not None:
                     self.control(lookahead_point)
+                else:
+                    self.inch_towards_start(min_point)
 
     def trajectory_callback(self, msg):
         self.get_logger().info(f"Receiving new trajectory {len(msg.poses)} points")
