@@ -23,9 +23,9 @@ class PurePursuit(Node):
             self.get_parameter("drive_topic").get_parameter_value().string_value
         )
 
-        self.lookahead_baseline = 1.0  # FILL IN #
+        self.lookahead_baseline = 0.5  # FILL IN #
         self.lookahead = self.lookahead_baseline
-        self.speed = 1.0  # FILL IN #
+        self.speed_baseline = 1.0  # FILL IN #
         self.wheelbase_length = 0.35  # FILL IN #
 
         self.trajectory = LineTrajectory("/followed_trajectory")
@@ -46,9 +46,12 @@ class PurePursuit(Node):
         self.current_pos = np.array([0.0, 0.0])
         self.trajectory_array = None
         self.end_goal = None
+        self.max_speed = 2.0 # CHANGE HERE
+        self.min_speed = 0.0 # CHANGE HERE
+        self.min_lookahead = 0.1 # CHANGE HERE
+        self.max_lookahead = 2.0 # CHANGE HERE
 
     def minimum_distance_vectorized(self):
-        # self.get_logger().info(f'The trajectory array {self.trajectory_array}')
         starts = self.trajectory_array[:-1]
         ends = self.trajectory_array[1:]
         segment_vectors = ends - starts
@@ -75,12 +78,14 @@ class PurePursuit(Node):
         # Find minimum distance and segment index
         min_index = np.argmin(dists)
         min_point = projections[min_index]
-        # min_dist = dists[min_index]
-        # self.lookahead = self.lookahead_baseline + min_dist*0.1
+        min_dist = dists[min_index]
+        scaled_lookahead = self.lookahead_baseline + min_dist*0.1
+        # Clip the lookahead 
+        self.lookahead = np.clip(scaled_lookahead, self.min_lookahead, self.max_lookahead)
         return min_point, min_index
     
     def find_lookahead_point(self, segment_index):
-        circle_radius = self.lookahead_baseline
+        circle_radius = self.lookahead
         circle_center = self.current_pos
         segments = self.trajectory_array[segment_index:]
 
@@ -154,11 +159,15 @@ class PurePursuit(Node):
 
         angle_to_goal = np.arctan2(local_y, local_x)
         angle = np.arctan(
-            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead_baseline + 1e-6)
+            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
         )
-
-        drive_cmd.drive.speed = self.speed
+        # Additional speed due to angle will be clamped between 0 and 1. Angle of 0 results in highest additional_speed
+        additional_speed = np.cos(angle) ** 2  # in [0, 1], high when angle is near 0
+        scaled_speed = self.speed_baseline + additional_speed
+        scaled_speed= np.clip(scaled_speed, self.min_speed, self.max_speed) # clip speed between 0 and 2, just to be safe
+        drive_cmd.drive.speed = scaled_speed
         drive_cmd.drive.steering_angle = angle
+        self.get_logger().info(f'speed of robot: {scaled_speed}')
         self.drive_pub.publish(drive_cmd)
 
     def send_stop_cmd(self):
@@ -201,7 +210,6 @@ class PurePursuit(Node):
         self.initialized_traj = True
         self.trajectory_array = np.array(self.trajectory.points)
         self.end_goal = self.trajectory_array[-1]
-        # self.get_logger().info(f'type of traj {type(self.trajectory_array), type(self.trajectory_array[0]), self.trajectory_array[0]}')
 
 
 def main(args=None):
