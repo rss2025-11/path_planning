@@ -9,6 +9,7 @@ from .utils import LineTrajectory
 import numpy as np
 from tf_transformations import euler_from_quaternion
 
+import cv2
 import math
 
 
@@ -37,7 +38,8 @@ class PathPlan(Node):
         self.map_set = False
 
         self.traversal_rate = 0.25
-        self.obstacle_threshold = 0.8
+        self.obstacle_threshold = self.obstacle_threshold
+        self.car_buffer = 0.25
 
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -67,15 +69,27 @@ class PathPlan(Node):
 
         self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory")
 
+        # self.map_processor = MapProcessor(dilation_radius=10, erosion_radius=0)
+
+
     def map_cb(self, map_msg):
         #Updates Map
+
         # Convert the map to a numpy array
-        self.map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width)) / 100.0
-        self.map = np.clip(self.map, 0, 1)
+        # self.map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width)) / 100.0
+       
+        self.resolution = map_msg.info.resolution  # number pixels per meter
+
+        raw_map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width))
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (math.ceil(self.car_buffer / self.resolution), 
+                                                               math.ceil(self.car_buffer / self.resolution)))
+        clipped_map = np.clip(raw_map, 0, 1)
+        self.map = cv2.morphologyEx(clipped_map, cv2.MORPH_DILATE, kernel)
+
+        # self.map = np.clip(self.map, 0, 1)
         self.map_width = map_msg.info.width
         self.map_height = map_msg.info.height
-
-        self.resolution = map_msg.info.resolution  # number pixels per meter
 
         # Convert the origin to a tuple
         origin_p = map_msg.info.origin.position
@@ -126,7 +140,7 @@ class PathPlan(Node):
                     came_from[neighbor] = cur_pos
                     queue.append(neighbor)
             
-        if came_from[end_point]:
+        if end_point in came_from:
             cur_pos = end_point
             while (cur_pos is not None):
                 self.trajectory.addPoint((float(cur_pos[0]), float(cur_pos[1])))
