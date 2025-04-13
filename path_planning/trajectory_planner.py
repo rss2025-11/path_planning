@@ -38,8 +38,10 @@ class PathPlan(Node):
         self.map_set = False
 
         self.traversal_rate = 0.25
-        self.obstacle_threshold = 0.8
-        self.car_buffer = 0.25
+        self.obstacle_threshold = 0.7
+        self.car_buffer = .95
+
+        self.path = []
 
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -139,13 +141,19 @@ class PathPlan(Node):
                 if neighbor not in came_from and self.not_wall(neighbor) and self.is_collision_free(cur_pos, neighbor): 
                     came_from[neighbor] = cur_pos
                     queue.append(neighbor)
-            
+        
+        # constructs points of path, starting from the end
         if end_point in came_from:
             cur_pos = end_point
             while (cur_pos is not None):
-                self.trajectory.addPoint((float(cur_pos[0]), float(cur_pos[1])))
+                self.path.append((float(cur_pos[0]), float(cur_pos[1])))
                 cur_pos = came_from[cur_pos]
-        
+
+        # reverses path
+        self.path.reverse()
+        for point in self.path:
+            self.trajectory.addPoint(point)
+
         self.traj_pub.publish(self.trajectory.toPoseArray())
         self.trajectory.publish_viz()
 
