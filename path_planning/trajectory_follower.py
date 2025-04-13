@@ -7,17 +7,21 @@ from .utils import LineTrajectory
 from tf_transformations import euler_from_quaternion
 import numpy as np
 
+
 class PurePursuit(Node):
-    """ Implements Pure Pursuit trajectory tracking with a fixed lookahead and speed.
-    """
+    """Implements Pure Pursuit trajectory tracking with a fixed lookahead and speed."""
 
     def __init__(self):
         super().__init__("trajectory_follower")
-        self.declare_parameter('odom_topic', "default")
-        self.declare_parameter('drive_topic', "default")
+        self.declare_parameter("odom_topic", "default")
+        self.declare_parameter("drive_topic", "default")
 
-        self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
-        self.drive_topic = self.get_parameter('drive_topic').get_parameter_value().string_value
+        self.odom_topic = (
+            self.get_parameter("odom_topic").get_parameter_value().string_value
+        )
+        self.drive_topic = (
+            self.get_parameter("drive_topic").get_parameter_value().string_value
+        )
 
         self.lookahead = 1.0  # FILL IN #
         self.speed = 1.0  # FILL IN #
@@ -25,30 +29,31 @@ class PurePursuit(Node):
 
         self.trajectory = LineTrajectory("/followed_trajectory")
 
-        self.traj_sub = self.create_subscription(PoseArray,
-                                                 "/trajectory/current",
-                                                 self.trajectory_callback,
-                                                 1)
-        
-        self.drive_pub = self.create_publisher(AckermannDriveStamped,
-                                               self.drive_topic,
-                                               1)
-        self.pose_sub = self.create_subscription(Odometry,
-                                                 "/pf/pose/odom",
-                                                 self.pose_callback,
-                                                 1)
+        self.traj_sub = self.create_subscription(
+            PoseArray, "/trajectory/current", self.trajectory_callback, 1
+        )
+
+        self.drive_pub = self.create_publisher(
+            AckermannDriveStamped, self.drive_topic, 1
+        )
+        self.pose_sub = self.create_subscription(
+            Odometry, "/pf/pose/odom", self.pose_callback, 1
+        )
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_theta = 0.0
         self.current_pos = np.array([0.0, 0.0])
         self.trajectory_array = None
+        self.end_goal = None
 
     def minimum_distance_vectorized(self):
         # self.get_logger().info(f'The trajectory array {self.trajectory_array}')
         starts = self.trajectory_array[:-1]
         ends = self.trajectory_array[1:]
-        segment_vectors = ends-starts
-        segment_lengths = np.diff(self.trajectory.distances)  # Gives length of each segment
+        segment_vectors = ends - starts
+        segment_lengths = np.diff(
+            self.trajectory.distances
+        )  # Gives length of each segment
         segment_lengths2 = segment_lengths**2
         # Handle zero-length segments to avoid divide-by-zero
         segment_lengths2 = np.where(segment_lengths2 == 0, 1e-10, segment_lengths2)
@@ -69,14 +74,14 @@ class PurePursuit(Node):
         # Find minimum distance and segment index
         min_index = np.argmin(dists)
         min_point = projections[min_index]
-        # min_segment = [self.trajectory_array[min_index], self.trajectory_array[min_index+1]]
         return min_point, min_index
 
     def find_lookahead_point(self, segment_index):
         circle_radius = self.lookahead
         circle_center = self.current_pos
-        # TODO: if too slow, just start the loop at segment_index rather than copying the list
         segments_to_check = self.trajectory_array[segment_index:]
+
+        valid_points = []
 
         for i in range(len(segments_to_check) - 1):
             segment_start = segments_to_check[i]
@@ -85,9 +90,12 @@ class PurePursuit(Node):
 
             a = np.dot(segment_vector, segment_vector)
             b = 2 * np.dot(segment_vector, segment_start - circle_center)
-            c = np.dot(segment_start - circle_center, segment_start - circle_center) - circle_radius ** 2
+            c = (
+                np.dot(segment_start - circle_center, segment_start - circle_center)
+                - circle_radius**2
+            )
 
-            discriminant = b ** 2 - 4 * a * c
+            discriminant = b**2 - 4 * a * c
 
             if discriminant < 0:
                 continue  # No intersection
@@ -99,9 +107,16 @@ class PurePursuit(Node):
             for t in [t1, t2]:
                 if 0 <= t <= 1:
                     lookahead_point = segment_start + t * segment_vector
-                    return lookahead_point
+                    valid_points.append((segment_index + i, lookahead_point))
 
-        self.get_logger().info("No valid lookahead point found: circle does not intersect any segment.")
+        if valid_points:
+            # Pick the one from the furthest segment, or furthest along segment
+            best_point = max(valid_points, key=lambda x: x[0])
+            return best_point[1]
+
+        self.get_logger().info(
+            "No valid lookahead point found: circle does not intersect any segment."
+        )
         return None
 
     def control(self, lookahead_point):
@@ -121,18 +136,26 @@ class PurePursuit(Node):
             local_x = 0.001
 
         angle_to_goal = np.arctan2(local_y, local_x)
-        angle = np.arctan(2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6))
+        angle = np.arctan(
+            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
+        )
 
         drive_cmd.drive.speed = self.speed
         drive_cmd.drive.steering_angle = angle
         self.drive_pub.publish(drive_cmd)
 
+    def send_stop_cmd(self):
+        drive_cmd = AckermannDriveStamped()
+        drive_cmd.header.stamp = self.get_clock().now().to_msg()
+        drive_cmd.drive.speed = 0.0
+        drive_cmd.drive.steering_angle = 0.0
+        self.drive_pub.publish(drive_cmd)
 
     def pose_callback(self, odometry_msg):
-        
+
         # Access the orientation quaternion
         orientation = odometry_msg.pose.pose.orientation
-        # Convert quaternion to Euler angles 
+        # Convert quaternion to Euler angles
         orientation_list = [orientation.x, orientation.y, orientation.z, orientation.w]
         (roll, pitch, yaw) = euler_from_quaternion(orientation_list)
         self.current_x = odometry_msg.pose.pose.position.x
@@ -141,17 +164,18 @@ class PurePursuit(Node):
         self.current_pos[0] = self.current_x
         self.current_pos[1] = self.current_y
 
-
         if self.trajectory_array is not None:
-            min_point, segment_idx = self.minimum_distance_vectorized()
-            lookahead_point = self.find_lookahead_point(segment_idx)
-            if lookahead_point is not None:
-                self.control(lookahead_point)
+            # Check if we already reached the end of the trajectory
+            if np.linalg.norm(self.current_pos - self.trajectory_array[-1]) < 0.5:
+                self.send_stop_cmd()
+            else:
+                min_point, segment_idx = self.minimum_distance_vectorized()
+                lookahead_point = self.find_lookahead_point(segment_idx)
+                if lookahead_point is not None:
+                    self.control(lookahead_point)
         # self.get_logger().info(f'Receiving a pose from localization: {self.current_x, self.current_y, self.current_theta}')
 
     # find the closest point from the robot to a trajectory segment (assuming piecewise linear segments)
-
-
 
     def trajectory_callback(self, msg):
         self.get_logger().info(f"Receiving new trajectory {len(msg.poses)} points")
@@ -159,11 +183,10 @@ class PurePursuit(Node):
         self.trajectory.clear()
         self.trajectory.fromPoseArray(msg)
         self.trajectory.publish_viz(duration=0.0)
-
         self.initialized_traj = True
         self.trajectory_array = np.array(self.trajectory.points)
-        # self.get_logger().info(f'type of traj {type(self.trajectory_array), type(self.trajectory_array[0]), self.trajectory_array[0]}')        
-
+        self.end_goal = self.trajectory_array[-1]
+        # self.get_logger().info(f'type of traj {type(self.trajectory_array), type(self.trajectory_array[0]), self.trajectory_array[0]}')
 
 
 def main(args=None):
