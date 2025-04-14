@@ -59,6 +59,7 @@ class PathPlan(Node):
         self.step_size = 0.5  # meters
         self.goal_threshold = 0.5  # meters
         self.search_radius = 1.0  # meters
+        self.goal_sampling_rate = 0.1  # 10% chance to sample goal
         self.obstacle_threshold = (
             0  # occupancy grid threshold - 0 means any non-free cell is an obstacle
         )
@@ -138,13 +139,6 @@ class PathPlan(Node):
             self.get_logger().warn("Map resolution or origin not set")
             return None
 
-        # Debug log input
-        self.get_logger().debug(f"Converting world point ({x}, {y}) to map coordinates")
-        self.get_logger().debug(
-            f"Map origin: ({self.map_origin.position.x}, {self.map_origin.position.y})"
-        )
-        self.get_logger().debug(f"Map resolution: {self.map_resolution}")
-
         # First, translate to origin
         dx = x - self.map_origin.position.x
         dy = y - self.map_origin.position.y
@@ -164,19 +158,10 @@ class PathPlan(Node):
         u = int(rotated_x / self.map_resolution)
         v = int(rotated_y / self.map_resolution)
 
-        # Debug log intermediate steps
-        self.get_logger().debug(f"Translated point: ({dx}, {dy})")
-        self.get_logger().debug(f"Map yaw: {math.degrees(yaw)} degrees")
-        self.get_logger().debug(f"Rotated point: ({rotated_x}, {rotated_y})")
-        self.get_logger().debug(f"Final map coordinates: ({u}, {v})")
-
         # Check if within map bounds
         if 0 <= u < self.map.shape[1] and 0 <= v < self.map.shape[0]:
             return (u, v)
         else:
-            self.get_logger().warn(
-                f"Point ({u}, {v}) is outside map bounds ({self.map.shape[1]}, {self.map.shape[0]})"
-            )
             return None
 
     def is_point_in_free_space(self, x, y):
@@ -334,7 +319,7 @@ class PathPlan(Node):
             iteration += 1
 
             # Sample random point
-            if random.random() < 0.1:  # 10% chance to sample goal
+            if random.random() < self.goal_sampling_rate:  # 10% chance to sample goal
                 rand_point = end_point
             else:
                 rand_point = self.get_random_point()
@@ -362,8 +347,14 @@ class PathPlan(Node):
             )
             best_parent = nearest
 
+            # Cache collision-free checks
+            collision_free_cache = {}
             for near in near_nodes:
-                if self.is_collision_free(near, new_point):
+                collision_free_cache[near] = self.is_collision_free(near, new_point)
+
+            # Find best parent
+            for near in near_nodes:
+                if collision_free_cache[near]:
                     cost = tree[near]["cost"] + math.sqrt(
                         (new_point[0] - near[0]) ** 2 + (new_point[1] - near[1]) ** 2
                     )
@@ -376,7 +367,7 @@ class PathPlan(Node):
 
             # Rewire tree
             for near in near_nodes:
-                if near != best_parent and self.is_collision_free(new_point, near):
+                if near != best_parent and collision_free_cache[near]:
                     cost = min_cost + math.sqrt(
                         (new_point[0] - near[0]) ** 2 + (new_point[1] - near[1]) ** 2
                     )
