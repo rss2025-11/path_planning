@@ -4,7 +4,7 @@ from rclpy.node import Node
 assert rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, PoseArray, Point
 from nav_msgs.msg import OccupancyGrid
-from .utils import LineTrajectory
+from .utils import LineTrajectory, PathProcessor
 
 import numpy as np
 from tf_transformations import euler_from_quaternion
@@ -12,6 +12,7 @@ from tf_transformations import euler_from_quaternion
 import cv2
 import math
 
+from queue import PriorityQueue
 
 class PathPlan(Node):
     """ Listens for goal pose published by RViz and uses it to plan a path from
@@ -39,9 +40,16 @@ class PathPlan(Node):
 
         self.traversal_rate = 0.25
         self.obstacle_threshold = 0.7
-        self.car_buffer = .95
+        self.car_buffer = 0.5
 
         self.path = []
+        
+        # Create path processor with collision checker
+        self.path_processor = PathProcessor(
+            collision_checker=self.is_collision_free,
+            max_smoothing_iterations=100,
+            max_attempts=10,
+        )
 
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -70,9 +78,7 @@ class PathPlan(Node):
         )
 
         self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory")
-
-        # self.map_processor = MapProcessor(dilation_radius=10, erosion_radius=0)
-
+        
 
     def map_cb(self, map_msg):
         #Updates Map
@@ -88,6 +94,14 @@ class PathPlan(Node):
                                                                math.ceil(self.car_buffer / self.resolution)))
         clipped_map = np.clip(raw_map, 0, 1)
         self.map = cv2.morphologyEx(clipped_map, cv2.MORPH_DILATE, kernel)
+
+
+        # cv2.imshow("raw_map", raw_map)
+        # cv2.imshow("dilated_map", self.map)
+
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+
 
         # self.map = np.clip(self.map, 0, 1)
         self.map_width = map_msg.info.width
@@ -121,26 +135,52 @@ class PathPlan(Node):
         print("Goal Located")
         self.plan_path(self.cur_start_pose, self.cur_goal, self.map)
 
+    def travel_cost(self, cur_pos, next_pos):
+        return abs(cur_pos[0] - next_pos[0]) + abs(cur_pos[1] - next_pos[1])
+
+
     def plan_path(self, start_point, end_point, map):
         #Check if map, pose, and goal exist before running
         if not (self.pose_set and self.goal_set and self.map_set):
             self.get_logger().info("One of starting position, goal, or map is not set")
             return
 
-        #Initiate BFS
-        queue = [start_point]
+        # #Initiate BFS
+        # queue = [start_point]
+        # came_from = dict()
+        # came_from[start_point] = None
+        # while len(queue) > 0:
+        #     cur_pos = queue.pop(0)
+        #     if cur_pos == end_point:
+        #         break
+
+        #     #Consider neighbor(s) if not already considered and not 
+        #     for neighbor in self.get_neighbors(cur_pos, self.traversal_rate):
+        #         if neighbor not in came_from and self.not_wall(neighbor) and self.is_collision_free(cur_pos, neighbor): 
+        #             came_from[neighbor] = cur_pos
+        #             queue.append(neighbor)
+
+        #Initiate A*
+        priority_queue = PriorityQueue() 
+        priority_queue.put((0, start_point))
         came_from = dict()
+        cost_so_far = dict()
         came_from[start_point] = None
-        while len(queue) > 0:
-            cur_pos = queue.pop(0)
+        cost_so_far[start_point] = 0
+        
+        while not priority_queue.empty():
+            cur_priority, cur_pos = priority_queue.get()
+
             if cur_pos == end_point:
                 break
 
-            #Consider neighbor(s) if not already considered and not 
             for neighbor in self.get_neighbors(cur_pos, self.traversal_rate):
-                if neighbor not in came_from and self.not_wall(neighbor) and self.is_collision_free(cur_pos, neighbor): 
+                new_cost = cost_so_far[cur_pos] + self.travel_cost(cur_pos, neighbor)
+                if (neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]) and self.not_wall(neighbor) and self.is_collision_free(cur_pos, neighbor):
+                    cost_so_far[neighbor] = new_cost
+                    priority = new_cost + self.travel_cost(neighbor, end_point)
+                    priority_queue.put((priority, neighbor))
                     came_from[neighbor] = cur_pos
-                    queue.append(neighbor)
         
         # constructs points of path, starting from the end
         if end_point in came_from:
@@ -151,7 +191,10 @@ class PathPlan(Node):
 
         # reverses path
         self.path.reverse()
-        for point in self.path:
+
+        smoothed_path = self.path_processor.smooth_path(self.path)
+
+        for point in smoothed_path:
             self.trajectory.addPoint(point)
 
         self.traj_pub.publish(self.trajectory.toPoseArray())

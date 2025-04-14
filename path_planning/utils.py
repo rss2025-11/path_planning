@@ -8,11 +8,13 @@ import os
 from typing import List, Tuple
 import json
 
+import math
+
 EPSILON = 0.00000000001
 
-''' These data structures can be used in the search function
-'''
 
+""" These data structures can be used in the search function
+"""
 
 class LineTrajectory:
     """ A class to wrap and work with piecewise linear trajectories. """
@@ -235,3 +237,144 @@ class LineTrajectory:
         header.stamp = stamp
         header.frame_id = frame_id
         return header
+    
+class PathProcessor:
+    """A class to handle post-processing and smoothing of paths."""
+
+    def __init__(
+        self, collision_checker, max_smoothing_iterations=100, max_attempts=10
+    ):
+        """
+        Initialize the path processor.
+
+        Args:
+            collision_checker: Function that checks if a path between two points is collision-free
+            max_smoothing_iterations (int): Maximum number of iterations for path smoothing
+            max_attempts (int): Maximum number of attempts to find a valid shortcut
+        """
+        self.collision_checker = collision_checker
+        self.max_smoothing_iterations = max_smoothing_iterations
+        self.max_attempts = max_attempts
+
+    def smooth_path(self, path):
+        """
+        Smooth the path using a combination of techniques.
+
+        Args:
+            path (list): List of (x,y) points representing the path
+
+        Returns:
+            list: Smoothed path
+        """
+        if len(path) < 3:
+            return path
+
+        # First, try to remove unnecessary waypoints
+        path = self._remove_redundant_points(path)
+
+        # Then try to find shortcuts
+        path = self._find_shortcuts(path)
+
+        return path
+
+    def _remove_redundant_points(self, path):
+        """
+        Remove points that don't contribute to the path's shape.
+        A point is redundant if the path from its previous to next point
+        is collision-free.
+        """
+        if len(path) < 3:
+            return path
+
+        new_path = [path[0]]  # Always keep start point
+        i = 1
+
+        while i < len(path) - 1:
+            # Check if we can skip this point
+            if self.collision_checker(new_path[-1], path[i + 1]):
+                # Skip this point
+                i += 1
+            else:
+                # Keep this point
+                new_path.append(path[i])
+                i += 1
+
+        new_path.append(path[-1])  # Always keep end point
+        return new_path
+
+    def _find_shortcuts(self, path):
+        """
+        Try to find shortcuts between non-consecutive points in the path.
+        This helps straighten out unnecessary curves.
+        """
+        if len(path) < 3:
+            return path
+
+        new_path = [path[0]]  # Start with first point
+        current_idx = 0
+
+        while current_idx < len(path) - 1:
+            # Try to find the furthest point we can connect to
+            best_idx = current_idx + 1
+            attempts = 0
+
+            for i in range(len(path) - 1, current_idx + 1, -1):
+                if self.collision_checker(path[current_idx], path[i]):
+                    best_idx = i
+                    break
+
+                attempts += 1
+                if attempts >= self.max_attempts:
+                    break
+
+            # Add the best point we found
+            new_path.append(path[best_idx])
+            current_idx = best_idx
+
+        return new_path
+
+    def _smooth_corners(self, path, max_deviation=0.1):
+        """
+        Smooth sharp corners in the path by adding intermediate points.
+        This helps make turns more gradual.
+
+        Args:
+            path (list): List of (x,y) points
+            max_deviation (float): Maximum allowed deviation from original path
+        """
+        if len(path) < 3:
+            return path
+
+        new_path = [path[0]]
+
+        for i in range(1, len(path) - 1):
+            prev = path[i - 1]
+            curr = path[i]
+            next_p = path[i + 1]
+
+            # Calculate vectors
+            v1 = (curr[0] - prev[0], curr[1] - prev[1])
+            v2 = (next_p[0] - curr[0], next_p[1] - curr[1])
+
+            # Calculate angle between vectors
+            dot = v1[0] * v2[0] + v1[1] * v2[1]
+            det = v1[0] * v2[1] - v1[1] * v2[0]
+            angle = math.atan2(det, dot)
+
+            # If the turn is too sharp, add intermediate points
+            if abs(angle) > math.pi / 4:  # 45 degrees
+                # Add points along a circular arc
+                num_points = int(
+                    abs(angle) / (math.pi / 8)
+                )  # Add points every 22.5 degrees
+                for j in range(1, num_points):
+                    t = j / num_points
+                    # Interpolate position
+                    x = curr[0] + max_deviation * math.cos(t * angle)
+                    y = curr[1] + max_deviation * math.sin(t * angle)
+                    new_path.append((x, y))
+
+            new_path.append(curr)
+
+        new_path.append(path[-1])
+        return new_path
