@@ -339,6 +339,9 @@ class PathProcessor:
         # Then try to find shortcuts
         path = self._find_shortcuts(path)
 
+        # Finally, smooth out the corners
+        # path = self._smooth_corners(path)
+        
         return path
 
     def _remove_redundant_points(self, path):
@@ -397,7 +400,7 @@ class PathProcessor:
 
         return new_path
 
-    def _smooth_corners(self, path, max_deviation=0.1):
+    def _smooth_corners(self, path, max_deviation=0.5):
         """
         Smooth sharp corners in the path by adding intermediate points.
         This helps make turns more gradual.
