@@ -5,6 +5,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from .utils import LineTrajectory
 from tf_transformations import euler_from_quaternion
+from std_msgs.msg import Float32
 import numpy as np
 
 
@@ -26,7 +27,7 @@ class PurePursuit(Node):
         self.lookahead_baseline = 0.5  # FILL IN #
         self.lookahead = self.lookahead_baseline
         self.speed_baseline = 1.0  # FILL IN #
-        self.wheelbase_length = 0.35  # FILL IN #
+        self.wheelbase_length = 0.33  # FILL IN #
 
         self.trajectory = LineTrajectory("/followed_trajectory")
 
@@ -38,7 +39,11 @@ class PurePursuit(Node):
             AckermannDriveStamped, self.drive_topic, 1
         )
         self.pose_sub = self.create_subscription(
-            Odometry, "/pf/pose/odom", self.pose_callback, 1
+            Odometry, self.odom_topic, self.pose_callback, 1
+        )
+
+        self.error_pub = self.create_publisher(
+            Float32, "/error", 1
         )
         self.current_x = 0.0
         self.current_y = 0.0
@@ -47,9 +52,10 @@ class PurePursuit(Node):
         self.trajectory_array = None
         self.end_goal = None
         self.max_speed = 2.0 # CHANGE HERE
-        self.min_speed = 0.0 # CHANGE HERE
+        self.min_speed = 1.0 # CHANGE HERE
         self.min_lookahead = 0.1 # CHANGE HERE
         self.max_lookahead = 2.0 # CHANGE HERE
+        self.lookahead_counter = 0
 
     def minimum_distance_vectorized(self):
         starts = self.trajectory_array[:-1]
@@ -79,12 +85,30 @@ class PurePursuit(Node):
         min_index = np.argmin(dists)
         min_point = projections[min_index]
         min_dist = dists[min_index]
-        scaled_lookahead = self.lookahead_baseline + min_dist*0.1
+
+        # Publish the error
+        error_msg = Float32()
+        error_msg.data = float(min_dist)
+        self.error_pub.publish(error_msg)
+
+        # scaled_lookahead = self.lookahead_baseline + min_dist*0.1
         # Clip the lookahead 
-        self.lookahead = np.clip(scaled_lookahead, self.min_lookahead, self.max_lookahead)
+        # scaled_lookahead = np.clip(scaled_lookahead, self.min_lookahead, self.max_lookahead)
+        # alpha = 0.1
+        # self.lookahead = (1 - alpha) * self.lookahead + alpha * scaled_lookahead
         return min_point, min_index
     
-    def find_lookahead_point(self, segment_index):
+    def find_lookahead_point(self, segment_index, min_point):
+        
+        if self.lookahead_counter > 10:
+            if segment_index < len(self.trajectory_array) -1:
+                d_minpoint_end = np.linalg.norm(self.trajectory_array[segment_index+1]-min_point)
+            else:
+                d_minpoint_end = self.lookahead_baseline
+            alpha = 0.9
+            self.lookahead = min(max(alpha * d_minpoint_end, d_minpoint_end), self.max_lookahead)
+            self.lookahead_counter = 0
+        self.lookahead_counter += 1
         circle_radius = self.lookahead
         circle_center = self.current_pos
         segments = self.trajectory_array[segment_index:]
@@ -188,7 +212,7 @@ class PurePursuit(Node):
         scaled_speed= np.clip(scaled_speed, self.min_speed, self.max_speed) # clip speed between 0 and 2, just to be safe
         drive_cmd.drive.speed = scaled_speed
         drive_cmd.drive.steering_angle = angle
-        self.get_logger().info(f'speed of robot: {scaled_speed}')
+        # self.get_logger().info(f'speed of robot: {scaled_speed}')
         self.drive_pub.publish(drive_cmd)
 
     def send_stop_cmd(self):
@@ -218,7 +242,7 @@ class PurePursuit(Node):
                 self.send_stop_cmd()
             else:
                 min_point, segment_idx = self.minimum_distance_vectorized()
-                lookahead_point = self.find_lookahead_point(segment_idx)
+                lookahead_point = self.find_lookahead_point(segment_idx, min_point)
                 if lookahead_point is not None:
                     self.control(lookahead_point)
                 else:
@@ -226,12 +250,12 @@ class PurePursuit(Node):
 
     def trajectory_callback(self, msg):
         self.get_logger().info(f"Receiving new trajectory {len(msg.poses)} points")
-
         self.trajectory.clear()
         self.trajectory.fromPoseArray(msg)
         self.trajectory.publish_viz(duration=0.0)
         self.initialized_traj = True
         self.trajectory_array = np.array(self.trajectory.points)
+        self.get_logger().info(f"The trajectory: {self.trajectory_array}")
         self.end_goal = self.trajectory_array[-1]
 
 
