@@ -9,6 +9,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, PoseArray
 from nav_msgs.msg import OccupancyGrid
 import threading
 import sys
+import random
 
 
 class PathPlannerBenchmark(Node):
@@ -25,6 +26,13 @@ class PathPlannerBenchmark(Node):
         self.path_sub = self.create_subscription(
             PoseArray, "/trajectory/current", self.path_callback, 10
         )
+
+        # Added subscription for /map data
+        self.map = None
+        self.map_origin = None
+        self.map_resolution = None
+        self.map_received = False
+        self.create_subscription(OccupancyGrid, "/map", self.map_callback, 10)
 
         # State variables
         self.path_received = False
@@ -132,6 +140,43 @@ class PathPlannerBenchmark(Node):
             "num_waypoints": len(self.path),
         }
 
+    def map_callback(self, msg):
+        self.get_logger().info("Map received")
+        self.map_resolution = msg.info.resolution
+        self.map_origin = msg.info.origin
+        self.map = np.array(msg.data).reshape((msg.info.height, msg.info.width))
+        self.map_received = True
+
+    def get_random_point(self):
+        """Generate a random point in the map bounds by sampling only unoccupied cells"""
+        if self.map is None:
+            return None
+        q = self.map_origin.orientation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        )
+
+        # Find all unoccupied cells (value == 0)
+        unoccupied_indices = np.argwhere(self.map == 0)
+        if len(unoccupied_indices) == 0:
+            return None  # No free space
+
+        # Randomly select one unoccupied cell
+        idx = random.randint(0, len(unoccupied_indices) - 1)
+        map_y, map_x = unoccupied_indices[idx]
+
+        # Convert map cell to world coordinates
+        map_x = float(map_x) * self.map_resolution
+        map_y = float(map_y) * self.map_resolution
+
+        world_x = (
+            map_x * math.cos(-yaw) - map_y * math.sin(-yaw) + self.map_origin.position.x
+        )
+        world_y = (
+            map_x * math.sin(-yaw) + map_y * math.cos(-yaw) + self.map_origin.position.y
+        )
+        return (world_x, world_y)
+
     def run_benchmark(
         self,
         start_x,
@@ -159,71 +204,120 @@ class PathPlannerBenchmark(Node):
         )
         self.publish_goal_pose(goal_x, goal_y, goal_qx, goal_qy, goal_qz, goal_qw)
 
-        # Spin until we get the metrics
-        while self.metrics is None:
-            rclpy.spin_once(self)
+        start_time = time.time()
+        while self.metrics is None and time.time() - start_time < 10:
+            rclpy.spin_once(self, timeout_sec=10)
+        if self.metrics is None:
+            self.get_logger().error("Benchmark failed: Timeout reached")
+            return None
 
         return self.metrics
 
 
 def main():
     rclpy.init()
-
-    # Create benchmark node
     benchmark = PathPlannerBenchmark()
 
-    # Define test scenario
-    start_x = -5.355334281921387
-    start_y = -1.5823718309402466
-    start_qx = 0.0
-    start_qy = 0.0
-    start_qz = 0.9873531850164253
-    start_qw = 0.15853607803247938
+    # Wait for /map to be received
+    print("Waiting for map data...")
+    start_wait = time.time()
+    while not benchmark.map_received and time.time() - start_wait < 10:
+        rclpy.spin_once(benchmark, timeout_sec=0.1)
+    if not benchmark.map_received:
+        print("Map data not received. Exiting.")
+        benchmark.destroy_node()
+        rclpy.shutdown()
+        return
 
-    goal_x = -20.891857147216797
-    goal_y = 34.2781867980957
-    goal_qx = 0.0
-    goal_qy = 0.0
-    goal_qz = -0.9964057465521651
-    goal_qw = 0.08470884391740079
+    # Set random seed for reproducibility
+    random.seed(13)
 
-    # Run benchmark
+    num_trials = 5
+    successful_trials = 0
+    aggregate_metrics = {
+        "planning_time": 0.0,
+        "path_length": 0.0,
+        "total_turning": 0.0,
+        "avg_turning_per_meter": 0.0,
+        "num_waypoints": 0,
+    }
+
     print("\n=== Path Planner Benchmark Results ===")
-    print(
-        "Metrics: planning_time(s), path_length(m), total_turning(rad), avg_turning_per_meter(rad/m), num_waypoints"
-    )
-    print("-" * 80)
+    for i in range(num_trials):
+        start_point = benchmark.get_random_point()
+        goal_point = benchmark.get_random_point()
+        if start_point is None or goal_point is None:
+            print(f"Trial {i+1}: Map data unavailable.")
+            continue
 
-    print(
-        f"\nStart: ({start_x}, {start_y}) with quaternion ({start_qx}, {start_qy}, {start_qz}, {start_qw})"
-    )
-    print(
-        f"Goal:  ({goal_x}, {goal_y}) with quaternion ({goal_qx}, {goal_qy}, {goal_qz}, {goal_qw})"
-    )
+        print(f"Trial {i+1}: Start {start_point}, Goal {goal_point}")
+        metrics = benchmark.run_benchmark(
+            start_point[0],
+            start_point[1],
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            goal_point[0],
+            goal_point[1],
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        )
 
-    metrics = benchmark.run_benchmark(
-        start_x,
-        start_y,
-        start_qx,
-        start_qy,
-        start_qz,
-        start_qw,
-        goal_x,
-        goal_y,
-        goal_qx,
-        goal_qy,
-        goal_qz,
-        goal_qw,
-    )
+        if metrics is not None:
+            print(f"    Trial {i+1} Metrics:")
+            print(f"      Planning time: {metrics['planning_time']:.3f}s")
+            print(f"      Path length: {metrics['path_length']:.3f}m")
+            print(f"      Total turning: {metrics['total_turning']:.3f}rad")
+            print(
+                f"      Avg turning per meter: {metrics['avg_turning_per_meter']:.3f}rad/m"
+            )
+            print(f"      Number of waypoints: {metrics['num_waypoints']}")
 
-    if metrics:
-        print(f"Planning time: {metrics['planning_time']:.3f}s")
-        print(f"Path length: {metrics['path_length']:.3f}m")
-        print(f"Total turning: {metrics['total_turning']:.3f}rad")
-        print(f"Avg turning per meter: {metrics['avg_turning_per_meter']:.3f}rad/m")
-        print(f"Number of waypoints: {metrics['num_waypoints']}")
+            aggregate_metrics["planning_time"] += metrics["planning_time"]
+            aggregate_metrics["path_length"] += metrics["path_length"]
+            aggregate_metrics["total_turning"] += metrics["total_turning"]
+            aggregate_metrics["avg_turning_per_meter"] += metrics[
+                "avg_turning_per_meter"
+            ]
+            aggregate_metrics["num_waypoints"] += metrics["num_waypoints"]
+            successful_trials += 1
+        else:
+            print(f"    Trial {i+1} failed (timeout or error).")
+
+    print("\n=== Benchmark Summary ===")
+    print(f"Success rate: {successful_trials}/{num_trials} trials")
+    if successful_trials > 0:
+        print("Averages over successful trials:")
+        print(
+            "  Planning time: {:.3f}s".format(
+                aggregate_metrics["planning_time"] / successful_trials
+            )
+        )
+        print(
+            "  Path length: {:.3f}m".format(
+                aggregate_metrics["path_length"] / successful_trials
+            )
+        )
+        print(
+            "  Total turning: {:.3f}rad".format(
+                aggregate_metrics["total_turning"] / successful_trials
+            )
+        )
+        print(
+            "  Avg turning per meter: {:.3f}rad/m".format(
+                aggregate_metrics["avg_turning_per_meter"] / successful_trials
+            )
+        )
+        print(
+            "  Number of waypoints: {:.1f}".format(
+                aggregate_metrics["num_waypoints"] / successful_trials
+            )
+        )
     else:
-        print("Benchmark failed")
+        print("No successful trials.")
 
     benchmark.destroy_node()
     rclpy.shutdown()
