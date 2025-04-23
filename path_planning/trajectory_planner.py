@@ -145,7 +145,7 @@ class PathPlan(Node):
             self.get_logger().info("One of starting position, goal, or map is not set")
             return
 
-        # #Initiate BFS
+        # Initiate BFS
         # queue = [start_point]
         # came_from = dict()
         # came_from[start_point] = None
@@ -160,7 +160,7 @@ class PathPlan(Node):
         #             came_from[neighbor] = cur_pos
         #             queue.append(neighbor)
 
-        #Initiate A*
+        # Initiate A*
         priority_queue = PriorityQueue() 
         priority_queue.put((0, start_point))
         came_from = dict()
@@ -194,6 +194,7 @@ class PathPlan(Node):
 
         smoothed_path = self.path_processor.smooth_path(self.path)
 
+        self.trajectory.clear()
         for point in smoothed_path:
             self.trajectory.addPoint(point)
 
