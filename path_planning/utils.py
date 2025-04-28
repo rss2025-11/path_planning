@@ -7,17 +7,51 @@ from std_msgs.msg import Header
 import os
 from typing import List, Tuple
 import json
-
 import math
+
+import cv2
 
 EPSILON = 0.00000000001
 
 
+class MapProcessor:
+    """A class to handle morphological operations on occupancy grids."""
+
+    def __init__(self, dilation_radius=0):
+        """
+        Initialize the map processor with optional dilation and erosion parameters.
+
+        Args:
+            dilation_radius (int): Radius in pixels for obstacle dilation. 0 means no dilation.
+        """
+        self.dilation_radius = dilation_radius
+
+    def process_map(self, occupancy_grid, resolution):
+        """
+        Process the occupancy grid with the configured morphological operations.
+
+        Args:
+            occupancy_grid (numpy.ndarray): 2D array representing the occupancy grid
+                                          (0 = free, 100 = occupied)
+
+        Returns:
+            numpy.ndarray: Processed occupancy grid
+        """
+        # Convert to binary (0 or 1) for morphological operations
+        binary_map = (occupancy_grid > 0).astype(np.uint8)
+
+         # Dilating map
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (math.ceil(self.dilation_radius / resolution), 
+                                                               math.ceil(self.dilation_radius / resolution)))
+        clipped_map = np.clip(binary_map, 0, 1)
+        return  cv2.morphologyEx(clipped_map, cv2.MORPH_DILATE, kernel)
+
 """ These data structures can be used in the search function
 """
 
+
 class LineTrajectory:
-    """ A class to wrap and work with piecewise linear trajectories. """
+    """A class to wrap and work with piecewise linear trajectories."""
 
     def __init__(self, node, viz_namespace=None):
         self.points: List[Tuple[float, float]] = []
@@ -29,9 +63,15 @@ class LineTrajectory:
 
         if viz_namespace:
             self.visualize = True
-            self.start_pub = self.node.create_publisher(Marker, viz_namespace + "/start_point", 1)
-            self.traj_pub = self.node.create_publisher(Marker, viz_namespace + "/path", 1)
-            self.end_pub = self.node.create_publisher(Marker, viz_namespace + "/end_pose", 1)
+            self.start_pub = self.node.create_publisher(
+                Marker, viz_namespace + "/start_point", 1
+            )
+            self.traj_pub = self.node.create_publisher(
+                Marker, viz_namespace + "/path", 1
+            )
+            self.end_pub = self.node.create_publisher(
+                Marker, viz_namespace + "/end_pose", 1
+            )
 
     # compute the distances along the path for all path segments beyond those already computed
     def update_distances(self):
@@ -50,7 +90,8 @@ class LineTrajectory:
     def distance_to_end(self, t):
         if not len(self.points) == len(self.distances):
             print(
-                "WARNING: Different number of distances and points, this should never happen! Expect incorrect results. See LineTrajectory class.")
+                "WARNING: Different number of distances and points, this should never happen! Expect incorrect results. See LineTrajectory class."
+            )
         dat = self.distance_along_trajectory(t)
         if dat == None:
             return None
@@ -89,7 +130,7 @@ class LineTrajectory:
         data["points"] = []
         for p in self.points:
             data["points"].append({"x": p[0], "y": p[1]})
-        with open(path, 'w') as outfile:
+        with open(path, "w") as outfile:
             json.dump(data, outfile)
 
     def mark_dirty(self):
@@ -218,7 +259,7 @@ class LineTrajectory:
                 # delete
                 marker.action = marker.DELETE
             self.traj_pub.publish(marker)
-            print('publishing traj')
+            print("publishing traj")
         elif self.traj_pub.get_subscription_count() == 0:
             print("Not publishing trajectory, no subscribers")
 
@@ -237,7 +278,8 @@ class LineTrajectory:
         header.stamp = stamp
         header.frame_id = frame_id
         return header
-    
+
+
 class PathProcessor:
     """A class to handle post-processing and smoothing of paths."""
 

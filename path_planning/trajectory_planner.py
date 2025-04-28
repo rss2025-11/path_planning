@@ -4,12 +4,11 @@ from rclpy.node import Node
 assert rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, PoseArray, Point
 from nav_msgs.msg import OccupancyGrid
-from .utils import LineTrajectory, PathProcessor
+from .utils import LineTrajectory, PathProcessor, MapProcessor
 
 import numpy as np
 from tf_transformations import euler_from_quaternion
 
-import cv2
 import math
 
 from queue import PriorityQueue
@@ -28,21 +27,16 @@ class PathPlan(Node):
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
         self.initial_pose_topic = self.get_parameter('initial_pose_topic').get_parameter_value().string_value
-
-        self.cur_start_pose = None
-        self.pose_set = False
-
-        self.cur_goal = None
-        self.goal_set = False
+        
+        self.cur_pose = None
+        self.goal_pose = None
 
         self.map = None
         self.map_set = False
 
         self.traversal_rate = 0.25
         self.obstacle_threshold = 0.7
-        self.car_buffer = 0.5
-
-        self.path = []
+        self.car_buffer = 0.9
         
         # Create path processor with collision checker
         self.path_processor = PathProcessor(
@@ -51,50 +45,48 @@ class PathPlan(Node):
             max_attempts=10,
         )
 
+        # Create map processor to dilate map
+        self.map_processor = MapProcessor(
+            dilation_radius = self.car_buffer
+        )
+
         self.map_sub = self.create_subscription(
             OccupancyGrid,
             self.map_topic,
             self.map_cb,
             1)
 
-        self.goal_sub = self.create_subscription(
-            PoseStamped,
-            "/goal_pose",
-            self.goal_cb,
-            10
-        )
-
         self.traj_pub = self.create_publisher(
             PoseArray,
-            "/trajectory/current",
+            "/planned_path",
             10
         )
 
-        self.pose_sub = self.create_subscription(
-            PoseWithCovarianceStamped,
-            self.initial_pose_topic,
-            self.pose_cb,
-            10
+        self.path_req_sub = self.create_subscription(
+            PoseArray,
+            "/path_request",
+            self.path_req_cb,
+            1
         )
 
         self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory")
-        
+
+    def path_req_cb(self, pts_msg):
+        # Clear prexisting trajectory
+        self.trajectory.clear()
+
+        target_points = pts_msg.poses
+        self.cur_pose = (round(target_points[0].position.x), round(target_points[0].position.y))
+        self.goal_pose = (round(target_points[1].position.x), round(target_points[1].position.y))
+
+        self.plan_path(self.cur_pose, self.goal_pose)
 
     def map_cb(self, map_msg):
-        #Updates Map
-
-        # Convert the map to a numpy array
-        # self.map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width)) / 100.0
-       
+        
         self.resolution = map_msg.info.resolution  # number pixels per meter
 
         raw_map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width))
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (math.ceil(self.car_buffer / self.resolution), 
-                                                               math.ceil(self.car_buffer / self.resolution)))
-        clipped_map = np.clip(raw_map, 0, 1)
-        self.map = cv2.morphologyEx(clipped_map, cv2.MORPH_DILATE, kernel)
-
+        self.map = self.map_processor.process_map(raw_map, self.resolution)
 
         # cv2.imshow("raw_map", raw_map)
         # cv2.imshow("dilated_map", self.map)
@@ -102,8 +94,6 @@ class PathPlan(Node):
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
 
-
-        # self.map = np.clip(self.map, 0, 1)
         self.map_width = map_msg.info.width
         self.map_height = map_msg.info.height
 
@@ -118,47 +108,33 @@ class PathPlan(Node):
         # Make the map set
         self.map_set = True
         print("Map initialized")
-        self.plan_path(self.cur_start_pose, self.cur_goal, self.map)
-
-
-    def pose_cb(self, pose_msg):
-        #Reinitializes pose
-        self.cur_start_pose = (round(pose_msg.pose.pose.position.x), round(pose_msg.pose.pose.position.y))
-        self.pose_set = True
-        print("Current Position Located")
-        self.plan_path(self.cur_start_pose, self.cur_goal, self.map)
-
-    def goal_cb(self, goal_msg):
-        #Reinitializes Goal
-        self.cur_goal = (round(goal_msg.pose.position.x) , round(goal_msg.pose.position.y))
-        self.goal_set = True
-        print("Goal Located")
-        self.plan_path(self.cur_start_pose, self.cur_goal, self.map)
+        self.plan_path(self.cur_pose, self.goal_pose)
 
     def travel_cost(self, cur_pos, next_pos):
         return abs(cur_pos[0] - next_pos[0]) + abs(cur_pos[1] - next_pos[1])
 
-
-    def plan_path(self, start_point, end_point, map):
-        #Check if map, pose, and goal exist before running
-        if not (self.pose_set and self.goal_set and self.map_set):
-            self.get_logger().info("One of starting position, goal, or map is not set")
+    def plan_path(self, start_point, end_point):
+        #Check if map, and at least one set of start/end points exist before running
+        if not (self.map_set and self.cur_pose and self.goal_pose):
+            if not self.map_set:
+                self.get_logger().info("Map is not set")
+            elif not self.cur_pose:
+                self.get_logger().info("Initial pose is not set")
+            else:
+                self.get_logger().info("Goal pose is not set")
             return
+        
+        path = self.run_astar(start_point, end_point)
 
-        # Initiate BFS
-        # queue = [start_point]
-        # came_from = dict()
-        # came_from[start_point] = None
-        # while len(queue) > 0:
-        #     cur_pos = queue.pop(0)
-        #     if cur_pos == end_point:
-        #         break
+        smoothed_path = self.path_processor.smooth_path(path)
+        for point in smoothed_path:
+                self.trajectory.addPoint(point)
 
-        #     #Consider neighbor(s) if not already considered and not 
-        #     for neighbor in self.get_neighbors(cur_pos, self.traversal_rate):
-        #         if neighbor not in came_from and self.not_wall(neighbor) and self.is_collision_free(cur_pos, neighbor): 
-        #             came_from[neighbor] = cur_pos
-        #             queue.append(neighbor)
+        self.traj_pub.publish(self.trajectory.toPoseArray())
+        self.trajectory.publish_viz()
+
+    def run_astar(self, start_point, end_point):
+        path = []
 
         # Initiate A*
         priority_queue = PriorityQueue() 
@@ -176,7 +152,7 @@ class PathPlan(Node):
 
             for neighbor in self.get_neighbors(cur_pos, self.traversal_rate):
                 new_cost = cost_so_far[cur_pos] + self.travel_cost(cur_pos, neighbor)
-                if (neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]) and self.not_wall(neighbor) and self.is_collision_free(cur_pos, neighbor):
+                if (neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]) and self.is_collision_free(cur_pos, neighbor):
                     cost_so_far[neighbor] = new_cost
                     priority = new_cost + self.travel_cost(neighbor, end_point)
                     priority_queue.put((priority, neighbor))
@@ -186,20 +162,11 @@ class PathPlan(Node):
         if end_point in came_from:
             cur_pos = end_point
             while (cur_pos is not None):
-                self.path.append((float(cur_pos[0]), float(cur_pos[1])))
+                path.append((float(cur_pos[0]), float(cur_pos[1])))
                 cur_pos = came_from[cur_pos]
-
-        # reverses path
-        self.path.reverse()
-
-        smoothed_path = self.path_processor.smooth_path(self.path)
-
-        self.trajectory.clear()
-        for point in smoothed_path:
-            self.trajectory.addPoint(point)
-
-        self.traj_pub.publish(self.trajectory.toPoseArray())
-        self.trajectory.publish_viz()
+        
+        path.reverse()
+        return path
 
     def get_neighbors(self, cur_pos, traversal_rate):
         # 4 neighbors
@@ -219,10 +186,6 @@ class PathPlan(Node):
                 (cur_pos[0] + traversal_rate, cur_pos[1] + traversal_rate), # down-left
                 (cur_pos[0] - traversal_rate, cur_pos[1] + traversal_rate), # down right 
                 ]
-
-    def not_wall(self, pos):
-        new_pos = self.world_to_map(pos)
-        return self.map[new_pos[0]][new_pos[1]] < .8 if new_pos is not None else False
         
     def world_to_map(self, pos):
          # First, translate to origin
