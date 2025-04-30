@@ -17,7 +17,12 @@ class BuildTrajectory(Node):
 
     def __init__(self):
         super().__init__("trajectory_builder")
-
+       
+        self.declare_parameter("path_topic", "/planned_path")
+        
+        self.path_topic = (
+            self.get_parameter("path_topic").get_parameter_value().string_value
+        )
         save_prefix = os.path.join(os.environ["HOME"], "lab6_trajectories")
 
         if not os.path.exists(save_prefix):
@@ -31,7 +36,7 @@ class BuildTrajectory(Node):
         self.data_points: List[Tuple[float, float]] = []
         self.count = 0
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 10)
-        self.traj_pub = self.create_publisher(PoseArray, "/trajectory/current", 10)
+        self.traj_pub = self.create_publisher(PoseArray, self.path_topic, 10)
         self.trajectory_points = self.create_publisher(Marker, "/traj_pts", 20)
         self.trajectory.publish_viz()
 

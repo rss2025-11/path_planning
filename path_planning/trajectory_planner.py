@@ -23,10 +23,12 @@ class PathPlan(Node):
         self.declare_parameter('odom_topic', "default")
         self.declare_parameter('map_topic', "default")
         self.declare_parameter('initial_pose_topic', "default")
+        self.declare_parameter('path_topic', "/planned_path")
 
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
         self.initial_pose_topic = self.get_parameter('initial_pose_topic').get_parameter_value().string_value
+        self.path_topic = self.get_parameter('path_topic').get_parameter_value().string_value
         
         self.cur_pose = None
         self.goal_pose = None
@@ -58,7 +60,7 @@ class PathPlan(Node):
 
         self.traj_pub = self.create_publisher(
             PoseArray,
-            "/planned_path",
+            self.path_topic,
             10
         )
 
@@ -69,7 +71,7 @@ class PathPlan(Node):
             1
         )
 
-        self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory")
+        self.trajectory = LineTrajectory(node=self, viz_namespace=self.path_topic)# viz_namespace="/planned_trajectory")
 
     def path_req_cb(self, pts_msg):
         # Clear prexisting trajectory

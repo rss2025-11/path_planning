@@ -1,6 +1,7 @@
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import PoseArray
+from std_msgs.msg import String
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from .utils import LineTrajectory
@@ -15,12 +16,16 @@ class PurePursuit(Node):
         super().__init__("trajectory_follower")
         self.declare_parameter("odom_topic", "default")
         self.declare_parameter("drive_topic", "default")
+        self.declare_parameter("path_topic", "/planned_path")
 
         self.odom_topic = (
             self.get_parameter("odom_topic").get_parameter_value().string_value
         )
         self.drive_topic = (
             self.get_parameter("drive_topic").get_parameter_value().string_value
+        )
+        self.path_topic = (
+            self.get_parameter("path_topic").get_parameter_value().string_value
         )
 
         self.lookahead_baseline = 0.5  # FILL IN #
@@ -31,7 +36,7 @@ class PurePursuit(Node):
         self.trajectory = LineTrajectory("/followed_trajectory")
 
         self.traj_sub = self.create_subscription(
-            PoseArray, "/trajectory/current", self.trajectory_callback, 1
+            PoseArray, self.path_topic, self.trajectory_callback, 1
         )
 
         self.drive_pub = self.create_publisher(
