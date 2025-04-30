@@ -76,8 +76,8 @@ class PathPlan(Node):
         self.trajectory.clear()
 
         target_points = pts_msg.poses
-        self.cur_pose = (round(target_points[0].position.x), round(target_points[0].position.y))
-        self.goal_pose = (round(target_points[1].position.x), round(target_points[1].position.y))
+        self.cur_pose = (self.custom_round(target_points[0].position.x, self.traversal_rate), self.custom_round(target_points[0].position.y, self.traversal_rate))
+        self.goal_pose = (self.custom_round(target_points[1].position.x, self.traversal_rate), self.custom_round(target_points[1].position.y, self.traversal_rate))
 
         self.plan_path(self.cur_pose, self.goal_pose)
 
@@ -215,6 +215,14 @@ class PathPlan(Node):
                 f"Point ({v}, {u}) is outside map bounds ({self.map.shape[1]}, {self.map.shape[0]})"
             )
             return None
+        
+    def custom_round(self, val, nearest_mod):
+        dif = val%nearest_mod
+        return_val = val - dif
+        if dif >= nearest_mod/2:
+            return return_val
+        else :
+            return return_val + nearest_mod
 
 
     def is_collision_free(self, point1, point2):
