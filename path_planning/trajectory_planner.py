@@ -109,7 +109,7 @@ class PathPlan(Node):
 
         # Make the map set
         self.map_set = True
-        print("Map initialized")
+        self.get_logger().info("Map initialized")
         self.plan_path(self.cur_pose, self.goal_pose)
 
     def travel_cost(self, cur_pos, next_pos):
