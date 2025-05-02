@@ -219,6 +219,7 @@ class PathPlan(Node):
             return None
         
     def custom_round(self, val, nearest_mod):
+        """Custom round for more accurate path finding"""
         dif = val%nearest_mod
         return_val = val - dif
         if dif >= nearest_mod/2:

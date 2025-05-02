@@ -4,7 +4,9 @@ trajectory_planner:
     map_topic: "/map"
     scan_topic: "/scan"
     initial_pose_topic: "/initialpose"
+    path_topic: "/planned_path"
 trajectory_follower:
   ros__parameters:
     odom_topic: "/pf/pose/odom"
-    drive_topic: "/drive"
+    drive_topic: "/vesc/high_level/input/nav_0"
+    path_topic: "/planned_path"
