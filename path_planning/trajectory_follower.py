@@ -1,7 +1,7 @@
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import PoseArray
-from std_msgs.msg import String
+from std_msgs.msg import Float32MultiArray
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from .utils import LineTrajectory
@@ -43,7 +43,7 @@ class PurePursuit(Node):
             AckermannDriveStamped, self.drive_topic, 1
         )
         self.pose_sub = self.create_subscription(
-            Odometry, "/pf/pose/odom", self.pose_callback, 1
+            Odometry, self.odom_topic, self.pose_callback, 1
         )
         self.current_x = 0.0
         self.current_y = 0.0
@@ -51,10 +51,16 @@ class PurePursuit(Node):
         self.current_pos = np.array([0.0, 0.0])
         self.trajectory_array = None
         self.end_goal = None
-        self.max_speed = 2.0 # CHANGE HERE
-        self.min_speed = 0.0 # CHANGE HERE
-        self.min_lookahead = 0.1 # CHANGE HERE
-        self.max_lookahead = 2.0 # CHANGE HERE
+        self.max_speed = 2.0  # CHANGE HERE
+        self.min_speed = 0.0  # CHANGE HERE
+        self.min_lookahead = 0.1  # CHANGE HERE
+        self.max_lookahead = 2.0  # CHANGE HERE
+        self.goal_threshold = 0.5  # CHANGE HERE
+        self.reached_end = False
+
+        self.reached_end_pub = self.create_publisher(
+            Float32MultiArray, "/reached_end", 1
+        )
 
     def minimum_distance_vectorized(self):
         starts = self.trajectory_array[:-1]
@@ -84,11 +90,13 @@ class PurePursuit(Node):
         min_index = np.argmin(dists)
         min_point = projections[min_index]
         min_dist = dists[min_index]
-        scaled_lookahead = self.lookahead_baseline + min_dist*0.1
-        # Clip the lookahead 
-        self.lookahead = np.clip(scaled_lookahead, self.min_lookahead, self.max_lookahead)
+        scaled_lookahead = self.lookahead_baseline + min_dist * 0.1
+        # Clip the lookahead
+        self.lookahead = np.clip(
+            scaled_lookahead, self.min_lookahead, self.max_lookahead
+        )
         return min_point, min_index
-    
+
     def find_lookahead_point(self, segment_index):
         circle_radius = self.lookahead
         circle_center = self.current_pos
@@ -98,20 +106,22 @@ class PurePursuit(Node):
             return None  # Not enough points to define a segment
 
         starts = segments[:-1]  # (N, 2)
-        ends = segments[1:]     # (N, 2)
+        ends = segments[1:]  # (N, 2)
         vectors = ends - starts  # (N, 2)
 
         # Coefficients for quadratic intersection equation
         a = np.sum(vectors * vectors, axis=1)  # (N,)
         start_to_center = starts - circle_center  # (N, 2)
         b = 2 * np.sum(vectors * start_to_center, axis=1)  # (N,)
-        c = np.sum(start_to_center * start_to_center, axis=1) - circle_radius ** 2  # (N,)
+        c = np.sum(start_to_center * start_to_center, axis=1) - circle_radius**2  # (N,)
 
         discriminant = b**2 - 4 * a * c  # (N,)
         valid = discriminant >= 0
 
         if not np.any(valid):
-            self.get_logger().info("No valid lookahead point found: no segment intersects.")
+            self.get_logger().info(
+                "No valid lookahead point found: no segment intersects."
+            )
             return None
 
         # Only compute intersections for valid segments
@@ -142,7 +152,9 @@ class PurePursuit(Node):
             best_point = max(valid_points, key=lambda x: x[0])
             return best_point[1]
 
-        self.get_logger().info("No valid lookahead point found: all intersections out of bounds.")
+        self.get_logger().info(
+            "No valid lookahead point found: all intersections out of bounds."
+        )
         return None
 
     def inch_towards_start(self, min_point):
@@ -162,7 +174,9 @@ class PurePursuit(Node):
         angle_to_goal = np.arctan2(local_y, local_x)
 
         # Use pure pursuit logic
-        angle = np.arctan(2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6))
+        angle = np.arctan(
+            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
+        )
         drive_cmd.drive.speed = 0.5
         drive_cmd.drive.steering_angle = angle
         self.drive_pub.publish(drive_cmd)
@@ -190,18 +204,24 @@ class PurePursuit(Node):
         # Additional speed due to angle will be clamped between 0 and 1. Angle of 0 results in highest additional_speed
         additional_speed = np.cos(angle) ** 2  # in [0, 1], high when angle is near 0
         scaled_speed = self.speed_baseline + additional_speed
-        scaled_speed= np.clip(scaled_speed, self.min_speed, self.max_speed) # clip speed between 0 and 2, just to be safe
+        scaled_speed = np.clip(
+            scaled_speed, self.min_speed, self.max_speed
+        )  # clip speed between 0 and 2, just to be safe
         drive_cmd.drive.speed = scaled_speed
         drive_cmd.drive.steering_angle = angle
-        self.get_logger().info(f'speed of robot: {scaled_speed}')
+        self.get_logger().info(f"speed of robot: {scaled_speed}")
         self.drive_pub.publish(drive_cmd)
 
-    def send_stop_cmd(self):
+    def send_stop_cmd(self, trajectory):
         drive_cmd = AckermannDriveStamped()
         drive_cmd.header.stamp = self.get_clock().now().to_msg()
         drive_cmd.drive.speed = 0.0
         drive_cmd.drive.steering_angle = 0.0
         self.drive_pub.publish(drive_cmd)
+
+        reached_end = Float32MultiArray()
+        reached_end.data = [trajectory[0], trajectory[1]]
+        self.reached_end_pub.publish(reached_end)
 
     # If particle filter is not running, the robot will remain stationary
     def pose_callback(self, odometry_msg):
@@ -219,8 +239,11 @@ class PurePursuit(Node):
 
         if self.trajectory_array is not None:
             # Check if we already reached the end of the trajectory
-            if np.linalg.norm(self.current_pos - self.trajectory_array[-1]) < 0.5:
-                self.send_stop_cmd()
+            if (not self.reached_end and 
+                np.linalg.norm(self.current_pos - self.trajectory_array[-1])
+                < self.goal_threshold
+            ):
+                self.send_stop_cmd(self.trajectory_array[-1])
             else:
                 min_point, segment_idx = self.minimum_distance_vectorized()
                 lookahead_point = self.find_lookahead_point(segment_idx)
