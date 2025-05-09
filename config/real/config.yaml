@@ -8,5 +8,5 @@ trajectory_planner:
 trajectory_follower:
   ros__parameters:
     odom_topic: "/pf/pose/odom"
-    drive_topic: "/vesc/high_level/input/nav_0"
+    drive_topic: "/vesc/high_level/input/nav_1"
     path_topic: "/planned_path"

@@ -38,7 +38,7 @@ class PathPlan(Node):
 
         self.traversal_rate = 0.25
         self.obstacle_threshold = 0.7
-        self.car_buffer = 0.9
+        self.car_buffer = 0.7 #0.9
         
         # Create path processor with collision checker
         self.path_processor = PathProcessor(
@@ -89,6 +89,7 @@ class PathPlan(Node):
 
         raw_map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width))
         self.map = self.map_processor.process_map(raw_map, self.resolution)
+        # self.map = raw_map
 
         # cv2.imshow("raw_map", raw_map)
         # cv2.imshow("dilated_map", self.map)
@@ -129,6 +130,7 @@ class PathPlan(Node):
         path = self.run_astar(start_point, end_point)
 
         smoothed_path = self.path_processor.smooth_path(path)
+        # smoothed_path = path
         for point in smoothed_path:
                 self.trajectory.addPoint(point)
 
@@ -233,6 +235,10 @@ class PathPlan(Node):
         if self.map is None:
             self.get_logger().warn("Map not available for collision checking")
             return False
+        
+        # if point2 == self.goal_pose:
+        #     return True
+
 
         # Convert points to map coordinates
         p1 = self.world_to_map(point1)
@@ -243,10 +249,10 @@ class PathPlan(Node):
             return False
 
         # Check if either point is in collision
-        if self.map[p1[0], p1[1]] > self.obstacle_threshold:
-            return False
-        if self.map[p2[0], p2[1]] > self.obstacle_threshold:
-            return False
+        # if not (point1 == self.cur_pose) and self.map[p1[0], p1[1]] > self.obstacle_threshold:
+        #     return False
+        # if not (point2 == self.goal_pose) and self.map[p2[0], p2[1]] > self.obstacle_threshold:
+        #     return False
 
         # Simple line sampling approach with higher sampling rate
         # Calculate number of steps based on distance
