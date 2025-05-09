@@ -61,7 +61,7 @@ class PurePursuit(Node):
         # self.end_goal = None
         self.max_speed = 2.0  # CHANGE HERE
         self.min_speed = 0.0  # CHANGE HERE
-        self.min_lookahead = .25 #0.1  # CHANGE HERE
+        self.min_lookahead = 0.25  # CHANGE HERE
         self.max_lookahead = 2.0  # CHANGE HERE
         self.goal_threshold = 0.5  # CHANGE HERE
     
@@ -129,7 +129,7 @@ class PurePursuit(Node):
             return self.lookahead_baseline  # Fallback
 
     def find_lookahead_point(self, segment_index):
-        circle_radius = self.lookahead_baseline
+        circle_radius = self.lookahead
         circle_center = self.current_pos
         segments = self.trajectory_array[segment_index:]
 
@@ -188,29 +188,6 @@ class PurePursuit(Node):
         )
         return None
 
-    def inch_towards_start(self, min_point):
-        """
-        Move forward slowly until within range of a trajectory.
-        """
-        drive_cmd = AckermannDriveStamped()
-        drive_cmd.header.stamp = self.get_clock().now().to_msg()
-        dx = min_point[0] - self.current_x
-        dy = min_point[1] - self.current_y
-
-        # Rotate into robot frame
-        local_x = np.cos(-self.current_theta) * dx - np.sin(-self.current_theta) * dy
-        local_y = np.sin(-self.current_theta) * dx + np.cos(-self.current_theta) * dy
-
-        # Compute angle to target in robot frame
-        angle_to_goal = np.arctan2(local_y, local_x)
-
-        # Use pure pursuit logic
-        angle = np.arctan(
-            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
-        )
-        drive_cmd.drive.speed = 0.5
-        drive_cmd.drive.steering_angle = angle
-        self.drive_pub.publish(drive_cmd)
 
     def control(self, lookahead_point):
         drive_cmd = AckermannDriveStamped()
@@ -230,7 +207,7 @@ class PurePursuit(Node):
 
         angle_to_goal = np.arctan2(local_y, local_x)
         angle = np.arctan(
-            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead_baseline + 1e-6) # ALWAYS USE BASELINE LOOKAHEAD
+            2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
         )
         drive_cmd.drive.speed = 1.0
         drive_cmd.drive.steering_angle = angle
@@ -263,9 +240,9 @@ class PurePursuit(Node):
         marker.pose.orientation.w = 1.0
 
         # Define scale
-        marker.scale.x = 1.0
-        marker.scale.y = 1.0
-        marker.scale.z = 1.0
+        marker.scale.x = 0.25
+        marker.scale.y = 0.25
+        marker.scale.z = 0.25
 
         # Define color
         marker.color.r = 1.0

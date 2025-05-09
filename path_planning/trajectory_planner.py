@@ -36,8 +36,8 @@ class PathPlan(Node):
         self.map = None
         self.map_set = False
 
-        self.traversal_rate = 0.25
-        self.obstacle_threshold = 0.7
+        self.traversal_rate = 0.125
+        self.obstacle_threshold = 0.5
         self.car_buffer = 0.7 #0.9
         
         # Create path processor with collision checker
