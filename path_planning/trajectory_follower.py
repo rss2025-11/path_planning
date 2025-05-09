@@ -64,11 +64,6 @@ class PurePursuit(Node):
         self.min_lookahead = .25 #0.1  # CHANGE HERE
         self.max_lookahead = 2.0  # CHANGE HERE
         self.goal_threshold = 0.5  # CHANGE HERE
-        self.reached_end = False
-
-        self.reached_end_pub = self.create_publisher(
-            Float32MultiArray, "/reached_end", 1
-        )
     
     def exit_callback(self, msg):
         self.trajectory_array = None
@@ -249,9 +244,6 @@ class PurePursuit(Node):
         drive_cmd.drive.steering_angle = 0.0
         self.drive_pub.publish(drive_cmd)
 
-        # reached_end = Float32MultiArray()
-        # reached_end.data = [trajectory[0], trajectory[1]]
-        # self.reached_end_pub.publish(reached_end)
 
     def viz_lookahead(self, lookahead_pt):
         marker = Marker()
@@ -298,11 +290,6 @@ class PurePursuit(Node):
 
         if self.trajectory_array is not None:
             # Check if we already reached the end of the trajectory
-            # self.get_logger().info(f"current pos {self.current_pos}, reached end {self.reached_end}")
-            # if (not self.reached_end and 
-            #     np.linalg.norm(self.current_pos - self.trajectory_array[-1])
-            #     < self.goal_threshold
-            # ):
             dist_to_goal = np.linalg.norm(self.current_pos - self.trajectory_array[-1])
             if (
                 dist_to_goal < self.goal_threshold
