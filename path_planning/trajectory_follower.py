@@ -29,9 +29,9 @@ class PurePursuit(Node):
             self.get_parameter("path_topic").get_parameter_value().string_value
         )
 
-        self.lookahead_baseline = 1.5 # 0.5  # FILL IN #
+        self.lookahead_baseline = 1.5  # FILL IN #
         self.lookahead = self.lookahead_baseline
-        self.speed_baseline = 1.0  # FILL IN #
+        self.speed_baseline = 0.8  # FILL IN #
         self.wheelbase_length = 0.35  # FILL IN #
 
         self.trajectory = LineTrajectory("/followed_trajectory")
@@ -111,6 +111,7 @@ class PurePursuit(Node):
         # The "upcoming goal point" is the end of the segment identified by min_segment_idx.
         # min_segment_idx is an index for the 'starts' array, so it's the index of the start point of the segment.
         upcoming_waypoint_idx = min_segment_idx + 1
+        dist_to_end = np.linalg.norm(self.current_pos - self.trajectory_array[-1])
 
         if upcoming_waypoint_idx < len(self.trajectory_array):
             upcoming_waypoint = self.trajectory_array[upcoming_waypoint_idx]
@@ -119,6 +120,9 @@ class PurePursuit(Node):
             )
             scaled_dist_to_upcoming_waypoint = dist_to_upcoming_waypoint / 2
             return np.clip(dist_to_upcoming_waypoint, self.min_lookahead, self.max_lookahead)
+        elif dist_to_end < self.lookahead:
+            
+            return dist_to_end/2
         else:
             # This case should ideally not be reached if the trajectory has at least 2 points.
             # Fallback to a default lookahead (e.g., baseline or min_lookahead).
@@ -209,7 +213,7 @@ class PurePursuit(Node):
         angle = np.arctan(
             2 * self.wheelbase_length * np.sin(angle_to_goal) / (self.lookahead + 1e-6)
         )
-        drive_cmd.drive.speed = 1.0
+        drive_cmd.drive.speed = 0.8
         drive_cmd.drive.steering_angle = angle
         # self.get_logger().info(f"speed of robot: {scaled_speed}")
         self.drive_pub.publish(drive_cmd)
@@ -274,15 +278,9 @@ class PurePursuit(Node):
                 self.send_stop_cmd(self.trajectory_array[-1])
             else:
                 min_point, segment_idx = self.minimum_distance_vectorized()
-                # if dist_to_goal < self.lookahead_baseline:
-                #     self.lookahead_baseline = self.lookahead_baseline/2
                 lookahead_point = self.find_lookahead_point(segment_idx)
                 
                 if lookahead_point is not None:
-                    # if lookahead_point[0] < 0:
-                    #     self.lookahead_baseline = np.linalg.norm(self.current_pos - self.trajectory_array[-1])/2
-                        
-                    # else:
                     self.viz_lookahead(lookahead_point)
                     self.control(lookahead_point)
             

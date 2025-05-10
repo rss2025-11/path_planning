@@ -4,7 +4,11 @@ from rclpy.node import Node
 assert rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, PoseArray, Point
 from nav_msgs.msg import OccupancyGrid
+from sensor_msgs.msg import LaserScan 
 from .utils import LineTrajectory, PathProcessor, MapProcessor
+import cv2
+import os
+from PIL import Image
 
 import numpy as np
 from tf_transformations import euler_from_quaternion
@@ -38,7 +42,7 @@ class PathPlan(Node):
 
         self.traversal_rate = 0.125
         self.obstacle_threshold = 0.5
-        self.car_buffer = 0.7 #0.9
+        self.car_buffer = 0.7
         
         # Create path processor with collision checker
         self.path_processor = PathProcessor(
@@ -72,7 +76,7 @@ class PathPlan(Node):
         )
 
         self.trajectory = LineTrajectory(node=self, viz_namespace=self.path_topic)# viz_namespace="/planned_trajectory")
-
+    
     def path_req_cb(self, pts_msg):
         # Clear prexisting trajectory
         self.trajectory.clear()
@@ -88,14 +92,7 @@ class PathPlan(Node):
         self.resolution = map_msg.info.resolution  # number pixels per meter
 
         raw_map = np.array(map_msg.data, np.double).reshape((map_msg.info.height, map_msg.info.width))
-        self.map = self.map_processor.process_map(raw_map, self.resolution)
-        # self.map = raw_map
-
-        # cv2.imshow("raw_map", raw_map)
-        # cv2.imshow("dilated_map", self.map)
-
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
+        self.map = raw_map
 
         self.map_width = map_msg.info.width
         self.map_height = map_msg.info.height
@@ -248,11 +245,6 @@ class PathPlan(Node):
         if p1 is None or p2 is None:
             return False
 
-        # Check if either point is in collision
-        # if not (point1 == self.cur_pose) and self.map[p1[0], p1[1]] > self.obstacle_threshold:
-        #     return False
-        # if not (point2 == self.goal_pose) and self.map[p2[0], p2[1]] > self.obstacle_threshold:
-        #     return False
 
         # Simple line sampling approach with higher sampling rate
         # Calculate number of steps based on distance
